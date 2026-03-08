@@ -18,3 +18,25 @@ What to keep:
 Reapply on future upstream versions:
 - Check every notification builder path in `Notifications.kt`.
 - Verify the small icon helper still creates a framework `Icon` with package `"android"`.
+
+## Patch 2: Ancillary log file creation
+
+Why:
+- Failure to create `.log`, `ERROR_*.log`, or `crash.log` should not kill `RecorderThread` or the
+  whole app.
+- These files are diagnostic only. Recording should continue even if ancillary logging cannot be
+  created.
+
+What to keep:
+- `RecorderThread.startLogcat()` must treat ancillary log creation and process startup failures as
+  warnings and continue recording without log capture.
+- `OutputDirUtils.createFileInDefaultDirBestEffort()` must return `null` if both the requested
+  log path and its `ERROR_...` fallback path fail.
+- `RecorderApplication`'s uncaught exception handler must never throw a second exception when
+  `crash.log` creation or dumping fails.
+
+Reapply on future upstream versions:
+- Re-check `RecorderThread.kt`, `RecorderApplication.kt`, and `OutputDirUtils.kt`.
+- Ensure `.log`, `ERROR_*.log`, and `crash.log` paths stay best-effort only.
+- Keep main recording file creation, encoding, and final move behavior unchanged unless upstream
+  refactors require touching the surrounding code.

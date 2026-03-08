@@ -241,6 +241,21 @@ class OutputDirUtils(private val context: Context, private val redactor: Redacto
     }
 
     /**
+     * Best-effort variant for ancillary files like logs.
+     *
+     * This still attempts the ERROR_ fallback path internally, but returns null if neither the
+     * requested path nor the fallback path can be created.
+     */
+    fun createFileInDefaultDirBestEffort(path: List<String>, mimeType: String): DocumentFile? {
+        return try {
+            createFileInDefaultDir(path, mimeType)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to create ancillary file ${redactor.redact(path)}", e)
+            null
+        }
+    }
+
+    /**
      * Try to move [sourceFile] to the user output directory at [path].
      *
      * @return The new file, which may be the same as [sourceFile] if moving was not needed.
