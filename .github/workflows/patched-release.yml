@@ -131,7 +131,7 @@ jobs:
 
           git -C source config user.name "autokick"
           git -C source config user.email "151527951+autokick@users.noreply.github.com"
-          git -C source am --3way ../fork/patches/*.patch
+          git -C source am --3way "${GITHUB_WORKSPACE}"/fork/patches/*.patch
 
       - name: Prepare signing inputs
         if: steps.release_state.outputs.exists != 'true' || (github.event_name == 'workflow_dispatch' && inputs.force_release)
