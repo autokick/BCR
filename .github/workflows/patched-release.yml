@@ -1,0 +1,195 @@
+name: Release patched upstream build
+
+on:
+  workflow_dispatch:
+    inputs:
+      upstream_tag:
+        description: Optional upstream tag override (for example v2.7)
+        required: false
+        type: string
+      force_release:
+        description: Rebuild even if the patched release tag already exists
+        required: false
+        type: boolean
+        default: false
+  schedule:
+    - cron: '17 */12 * * *'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: patched-upstream-release
+  cancel-in-progress: false
+
+jobs:
+  build_release:
+    name: Build patched upstream release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out fork repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          path: fork
+
+      - name: Determine upstream tag
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          upstream_tag="${{ inputs.upstream_tag }}"
+          if [[ -z "${upstream_tag}" ]]; then
+            upstream_tag="$(
+              git ls-remote --refs --tags https://github.com/chenxiaolong/BCR.git 'v*' \
+                | awk '{print $2}' \
+                | sed 's|refs/tags/||' \
+                | sort -V \
+                | tail -n 1
+            )"
+          fi
+
+          if [[ -z "${upstream_tag}" ]]; then
+            echo "::error::Failed to determine the latest upstream tag"
+            exit 1
+          fi
+
+          echo "upstream_tag=${upstream_tag}" >> "${GITHUB_OUTPUT}"
+          echo "release_tag=patched-${upstream_tag}" >> "${GITHUB_OUTPUT}"
+          echo "release_name=Patched ${upstream_tag}" >> "${GITHUB_OUTPUT}"
+
+      - name: Check whether release already exists
+        id: release_state
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if git -C fork ls-remote --exit-code origin \
+              "refs/tags/${{ steps.version.outputs.release_tag }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "exists=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Stop when patched release already exists
+        if: steps.release_state.outputs.exists == 'true' && !(github.event_name == 'workflow_dispatch' && inputs.force_release)
+        shell: bash
+        run: |
+          echo "Patched release ${{ steps.version.outputs.release_tag }} already exists"
+
+      - name: Check out upstream source
+        if: steps.release_state.outputs.exists != 'true' || (github.event_name == 'workflow_dispatch' && inputs.force_release)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: chenxiaolong/BCR
+          ref: ${{ steps.version.outputs.upstream_tag }}
+          fetch-depth: 0
+          path: source
+
+      - name: Validate gradle wrapper checksum
+        if: steps.release_state.outputs.exists != 'true' || (github.event_name == 'workflow_dispatch' && inputs.force_release)
+        uses: gradle/actions/wrapper-validation@f29f5a9d7b09a7c6b29859002d29d24e1674c884 # v5.0.1
+        with:
+          min-wrapper-count: 1
+
+      - name: Set up JDK 21
+        if: steps.release_state.outputs.exists != 'true' || (github.event_name == 'workflow_dispatch' && inputs.force_release)
+        uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5.2.0
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: gradle
+
+      - name: Validate release signing secrets
+        if: steps.release_state.outputs.exists != 'true' || (github.event_name == 'workflow_dispatch' && inputs.force_release)
+        shell: bash
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          RELEASE_KEYSTORE_PASSPHRASE: ${{ secrets.RELEASE_KEYSTORE_PASSPHRASE }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSPHRASE: ${{ secrets.RELEASE_KEY_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+
+          for var in \
+            RELEASE_KEYSTORE_BASE64 \
+            RELEASE_KEYSTORE_PASSPHRASE \
+            RELEASE_KEY_ALIAS \
+            RELEASE_KEY_PASSPHRASE; do
+            if [[ -z "${!var}" ]]; then
+              echo "::error::Missing GitHub Actions secret ${var}"
+              exit 1
+            fi
+          done
+
+      - name: Apply local patches
+        if: steps.release_state.outputs.exists != 'true' || (github.event_name == 'workflow_dispatch' && inputs.force_release)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git -C source config user.name "autokick"
+          git -C source config user.email "151527951+autokick@users.noreply.github.com"
+          git -C source am --3way ../fork/patches/*.patch
+
+      - name: Prepare signing inputs
+        if: steps.release_state.outputs.exists != 'true' || (github.event_name == 'workflow_dispatch' && inputs.force_release)
+        shell: bash
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+
+          sdk_dir="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          if [[ -z "${sdk_dir}" ]]; then
+            echo "::error::ANDROID_SDK_ROOT or ANDROID_HOME must be available on the runner"
+            exit 1
+          fi
+
+          printf 'sdk.dir=%s\n' "${sdk_dir}" > source/local.properties
+          echo "${RELEASE_KEYSTORE_BASE64}" | base64 --decode > source/release.keystore
+
+      - name: Build patched release
+        if: steps.release_state.outputs.exists != 'true' || (github.event_name == 'workflow_dispatch' && inputs.force_release)
+        shell: bash
+        env:
+          RELEASE_KEYSTORE: ${{ github.workspace }}/source/release.keystore
+          RELEASE_KEYSTORE_PASSPHRASE: ${{ secrets.RELEASE_KEYSTORE_PASSPHRASE }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSPHRASE: ${{ secrets.RELEASE_KEY_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+
+          cd source
+          ./gradlew --no-daemon assembleRelease zipRelease
+
+      - name: Prepare release notes
+        if: steps.release_state.outputs.exists != 'true' || (github.event_name == 'workflow_dispatch' && inputs.force_release)
+        shell: bash
+        run: |
+          cat > release-body.md <<EOF
+          Automated patched build for upstream BCR ${{ steps.version.outputs.upstream_tag }}.
+
+          Local patches applied:
+          - Use framework Icon object for notification small icon
+          - Make ancillary log file creation best-effort
+
+          Fork automation commit: ${GITHUB_SHA}
+          Upstream source tag: ${{ steps.version.outputs.upstream_tag }}
+          EOF
+
+      - name: Publish GitHub release
+        if: steps.release_state.outputs.exists != 'true' || (github.event_name == 'workflow_dispatch' && inputs.force_release)
+        uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b # v2.5.0
+        with:
+          tag_name: ${{ steps.version.outputs.release_tag }}
+          target_commitish: master
+          name: ${{ steps.version.outputs.release_name }}
+          body_path: release-body.md
+          fail_on_unmatched_files: true
+          files: |
+            source/app/build/outputs/apk/release/app-release.apk
+            source/app/build/distributions/release/*.zip
+            fork/PATCH_NOTES.md
+            fork/patches/*.patch

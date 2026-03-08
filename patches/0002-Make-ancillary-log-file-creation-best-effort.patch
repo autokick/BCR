@@ -1,0 +1,243 @@
+From cfba5385aa1c5f6ccf56bc9580708d4e7cb7e379 Mon Sep 17 00:00:00 2001
+From: autokick <151527951+autokick@users.noreply.github.com>
+Date: Sun, 8 Mar 2026 12:02:30 +0900
+Subject: [PATCH 2/2] Make ancillary log file creation best-effort
+
+---
+ PATCH_NOTES.md                                | 22 +++++
+ .../com/chiller3/bcr/RecorderApplication.kt   | 24 +++--
+ .../java/com/chiller3/bcr/RecorderThread.kt   | 88 +++++++++++++------
+ .../com/chiller3/bcr/output/OutputDirUtils.kt | 15 ++++
+ 4 files changed, 114 insertions(+), 35 deletions(-)
+
+diff --git a/PATCH_NOTES.md b/PATCH_NOTES.md
+index 47c7c09..aaca33b 100644
+--- a/PATCH_NOTES.md
++++ b/PATCH_NOTES.md
+@@ -18,3 +18,25 @@ What to keep:
+ Reapply on future upstream versions:
+ - Check every notification builder path in `Notifications.kt`.
+ - Verify the small icon helper still creates a framework `Icon` with package `"android"`.
++
++## Patch 2: Ancillary log file creation
++
++Why:
++- Failure to create `.log`, `ERROR_*.log`, or `crash.log` should not kill `RecorderThread` or the
++  whole app.
++- These files are diagnostic only. Recording should continue even if ancillary logging cannot be
++  created.
++
++What to keep:
++- `RecorderThread.startLogcat()` must treat ancillary log creation and process startup failures as
++  warnings and continue recording without log capture.
++- `OutputDirUtils.createFileInDefaultDirBestEffort()` must return `null` if both the requested
++  log path and its `ERROR_...` fallback path fail.
++- `RecorderApplication`'s uncaught exception handler must never throw a second exception when
++  `crash.log` creation or dumping fails.
++
++Reapply on future upstream versions:
++- Re-check `RecorderThread.kt`, `RecorderApplication.kt`, and `OutputDirUtils.kt`.
++- Ensure `.log`, `ERROR_*.log`, and `crash.log` paths stay best-effort only.
++- Keep main recording file creation, encoding, and final move behavior unchanged unless upstream
++  refactors require touching the surrounding code.
+diff --git a/app/src/main/java/com/chiller3/bcr/RecorderApplication.kt b/app/src/main/java/com/chiller3/bcr/RecorderApplication.kt
+index b7ef159..ccb5d7d 100644
+--- a/app/src/main/java/com/chiller3/bcr/RecorderApplication.kt
++++ b/app/src/main/java/com/chiller3/bcr/RecorderApplication.kt
+@@ -24,19 +24,27 @@ class RecorderApplication : Application() {
+                 val redactor = OutputDirUtils.NULL_REDACTOR
+                 val dirUtils = OutputDirUtils(this, redactor)
+                 val logcatPath = listOf(Logcat.FILENAME_CRASH)
+-                val logcatFile = dirUtils.createFileInDefaultDir(logcatPath, "text/plain")
++                val logcatFile = dirUtils.createFileInDefaultDirBestEffort(logcatPath, Logcat.MIMETYPE)
+ 
+-                Log.e(TAG, "Saving logcat to ${redactor.redact(logcatFile.uri)} due to uncaught exception in $t", e)
++                if (logcatFile == null) {
++                    Log.w(TAG, "Failed to create crash log file for uncaught exception in $t")
++                } else {
++                    Log.e(TAG, "Saving logcat to ${redactor.redact(logcatFile.uri)} due to uncaught exception in $t", e)
+ 
+-                try {
+-                    Logcat.dump(logcatFile.uri.toFile())
+-                } finally {
+                     try {
+-                        dirUtils.moveToOutputDir(logcatFile, logcatPath, "text/plain")
+-                    } catch (_: Exception) {
+-                        // Ignore.
++                        Logcat.dump(logcatFile.uri.toFile())
++                    } catch (dumpException: Exception) {
++                        Log.w(TAG, "Failed to dump crash log for uncaught exception in $t", dumpException)
++                    } finally {
++                        try {
++                            dirUtils.moveToOutputDir(logcatFile, logcatPath, Logcat.MIMETYPE)
++                        } catch (_: Exception) {
++                            // Ignore.
++                        }
+                     }
+                 }
++            } catch (handlerException: Exception) {
++                Log.w(TAG, "Failed while handling uncaught exception in $t", handlerException)
+             } finally {
+                 oldCrashHandler?.uncaughtException(t, e)
+             }
+diff --git a/app/src/main/java/com/chiller3/bcr/RecorderThread.kt b/app/src/main/java/com/chiller3/bcr/RecorderThread.kt
+index 8909d78..4cd3c8f 100644
+--- a/app/src/main/java/com/chiller3/bcr/RecorderThread.kt
++++ b/app/src/main/java/com/chiller3/bcr/RecorderThread.kt
+@@ -159,9 +159,9 @@ class RecorderThread(
+     private val sampleRate: UInt
+ 
+     // Logging
+-    private lateinit var logcatPath: OutputPath
+-    private lateinit var logcatFile: DocumentFile
+-    private lateinit var logcatProcess: Process
++    private var logcatPath: OutputPath? = null
++    private var logcatFile: DocumentFile? = null
++    private var logcatProcess: Process? = null
+ 
+     private var wallBeginNanos = 0L
+ 
+@@ -350,14 +350,17 @@ class RecorderThread(
+ 
+             try {
+                 val logcatOutput = stopLogcat()
+-
+-                // Log files are always kept when an error occurs to avoid the hassle of having the
+-                // user manually enable debug mode and needing to reproduce the problem.
+-                if (prefs.isDebugMode || status is Status.Failed) {
+-                    additionalFiles.add(logcatOutput)
++                if (logcatOutput != null) {
++                    // Log files are always kept when an error occurs to avoid the hassle of having
++                    // the user manually enable debug mode and needing to reproduce the problem.
++                    if (prefs.isDebugMode || status is Status.Failed) {
++                        additionalFiles.add(logcatOutput)
++                    } else {
++                        Log.d(tag, "No need to preserve logcat")
++                        logcatOutput.toDocumentFile(context).delete()
++                    }
+                 } else {
+-                    Log.d(tag, "No need to preserve logcat")
+-                    logcatOutput.toDocumentFile(context).delete()
++                    Log.d(tag, "No ancillary log file was captured")
+                 }
+             } catch (e: Exception) {
+                 Log.w(tag, "Failed to dump logcat", e)
+@@ -403,26 +406,57 @@ class RecorderThread(
+     }
+ 
+     private fun startLogcat() {
+-        assert(!this::logcatProcess.isInitialized) { "logcat already started" }
++        check(logcatProcess == null) { "logcat already started" }
+ 
+         Log.d(tag, "Starting log file (${BuildConfig.VERSION_NAME})")
+ 
+-        logcatPath = getLogcatPath()
+-        logcatFile = dirUtils.createFileInDefaultDir(logcatPath.value, MIME_LOGCAT)
+-        logcatProcess = ProcessBuilder("logcat", "*:V")
+-            // This is better than -f because the logcat implementation calls fflush() when the
+-            // output stream is stdout. logcatFile is guaranteed to have file:// scheme because it's
+-            // created in the default output directory.
+-            .redirectOutput(logcatFile.uri.toFile())
+-            .redirectErrorStream(true)
+-            .start()
++        val newLogcatPath = getLogcatPath()
++        val newLogcatFile = dirUtils.createFileInDefaultDirBestEffort(newLogcatPath.value, MIME_LOGCAT)
++        if (newLogcatFile == null) {
++            Log.w(tag, "Failed to create ancillary log file; continuing without log capture")
++            return
++        }
++
++        val newLogcatProcess = try {
++            ProcessBuilder("logcat", "*:V")
++                // This is better than -f because the logcat implementation calls fflush() when the
++                // output stream is stdout. logcatFile is guaranteed to have file:// scheme because
++                // it's created in the default output directory.
++                .redirectOutput(newLogcatFile.uri.toFile())
++                .redirectErrorStream(true)
++                .start()
++        } catch (e: Exception) {
++            Log.w(tag, "Failed to start ancillary log capture; continuing without it", e)
++
++            try {
++                newLogcatFile.delete()
++            } catch (deleteException: Exception) {
++                Log.w(tag, "Failed to clean up incomplete ancillary log file", deleteException)
++            }
++
++            return
++        }
++
++        logcatPath = newLogcatPath
++        logcatFile = newLogcatFile
++        logcatProcess = newLogcatProcess
+     }
+ 
+-    private fun stopLogcat(): OutputFile {
+-        assert(this::logcatProcess.isInitialized) { "logcat not started" }
++    private fun stopLogcat(): OutputFile? {
++        val oldLogcatProcess = logcatProcess
++        val oldLogcatFile = logcatFile
++        val oldLogcatPath = logcatPath
++
++        logcatProcess = null
++        logcatFile = null
++        logcatPath = null
++
++        if (oldLogcatProcess == null || oldLogcatFile == null || oldLogcatPath == null) {
++            return null
++        }
+ 
+-        var uri = logcatFile.uri
+-        var path = logcatPath
++        var uri = oldLogcatFile.uri
++        var path = oldLogcatPath
+         var moveError: Exception? = null
+ 
+         try {
+@@ -433,14 +467,14 @@ class RecorderThread(
+                 // handling to flush buffers when interrupted.
+                 sleep(1000)
+ 
+-                logcatProcess.destroy()
++                oldLogcatProcess.destroy()
+             } finally {
+-                logcatProcess.waitFor()
++                oldLogcatProcess.waitFor()
+             }
+         } finally {
+             val finalLogcatPath = getLogcatPath()
+             try {
+-                uri = dirUtils.moveToOutputDir(logcatFile, finalLogcatPath.value, MIME_LOGCAT).uri
++                uri = dirUtils.moveToOutputDir(oldLogcatFile, finalLogcatPath.value, MIME_LOGCAT).uri
+                 path = finalLogcatPath
+             } catch (e: Exception) {
+                 moveError = e
+diff --git a/app/src/main/java/com/chiller3/bcr/output/OutputDirUtils.kt b/app/src/main/java/com/chiller3/bcr/output/OutputDirUtils.kt
+index 9264a48..9866752 100644
+--- a/app/src/main/java/com/chiller3/bcr/output/OutputDirUtils.kt
++++ b/app/src/main/java/com/chiller3/bcr/output/OutputDirUtils.kt
+@@ -240,6 +240,21 @@ class OutputDirUtils(private val context: Context, private val redactor: Redacto
+         return createFileWithFallback(defaultDir, path, mimeType)
+     }
+ 
++    /**
++     * Best-effort variant for ancillary files like logs.
++     *
++     * This still attempts the ERROR_ fallback path internally, but returns null if neither the
++     * requested path nor the fallback path can be created.
++     */
++    fun createFileInDefaultDirBestEffort(path: List<String>, mimeType: String): DocumentFile? {
++        return try {
++            createFileInDefaultDir(path, mimeType)
++        } catch (e: Exception) {
++            Log.w(TAG, "Failed to create ancillary file ${redactor.redact(path)}", e)
++            null
++        }
++    }
++
+     /**
+      * Try to move [sourceFile] to the user output directory at [path].
+      *
+-- 
+2.51.0.windows.1
+

@@ -40,3 +40,17 @@ Reapply on future upstream versions:
 - Ensure `.log`, `ERROR_*.log`, and `crash.log` paths stay best-effort only.
 - Keep main recording file creation, encoding, and final move behavior unchanged unless upstream
   refactors require touching the surrounding code.
+
+## GitHub Actions automation
+
+Workflow:
+- `.github/workflows/patched-release.yml` watches for new upstream tags on a schedule and also
+  supports manual runs via `workflow_dispatch`.
+- It checks out upstream `chenxiaolong/BCR` at the latest tag, applies `patches/*.patch`, builds
+  `app-release.apk` and the release ZIP, and publishes them as a fork release.
+
+Required repository secrets:
+- `RELEASE_KEYSTORE_BASE64`
+- `RELEASE_KEYSTORE_PASSPHRASE`
+- `RELEASE_KEY_ALIAS`
+- `RELEASE_KEY_PASSPHRASE`
