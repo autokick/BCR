@@ -14,6 +14,7 @@ import android.content.ContentResolver
 import android.content.Context
 import android.content.Intent
 import android.content.res.Resources
+import android.graphics.drawable.Icon
 import android.os.Build
 import android.os.VibrationEffect
 import android.os.Vibrator
@@ -138,6 +139,12 @@ class Notifications(
         LEGACY_CHANNEL_IDS.forEach { notificationManager.deleteNotificationChannel(it) }
     }
 
+    /** Use a framework Icon so SystemUI resolves the small icon from the android package. */
+    private fun Notification.Builder.setSafeSmallIcon(): Notification.Builder {
+        setSmallIcon(Icon.createWithResource("android", android.R.drawable.sym_def_app_icon))
+        return this
+    }
+
     /**
      * Create a persistent notification for use during recording. The notification appearance is
      * fully static and in progress recording is represented by the presence or absence of the
@@ -159,7 +166,7 @@ class Notifications(
                 setContentText(message)
                 style = Notification.BigTextStyle()
             }
-            setSmallIcon(R.drawable.ic_launcher_quick_settings)
+            setSafeSmallIcon()
             setContentIntent(pendingIntent)
             setOngoing(true)
             setOnlyAlertOnce(true)
@@ -248,7 +255,7 @@ class Notifications(
                 setContentText(text)
                 style = Notification.BigTextStyle()
             }
-            setSmallIcon(R.drawable.ic_launcher_quick_settings)
+            setSafeSmallIcon()
 
             if (file != null && !isDeviceProtectedStorage(file)) {
                 // It is not possible to grant access to SAF URIs to other applications
@@ -411,7 +418,7 @@ class Notifications(
             })
             style = Notification.BigTextStyle()
 
-            setSmallIcon(R.drawable.ic_launcher_quick_settings)
+            setSafeSmallIcon()
 
             build()
         }
@@ -436,7 +443,7 @@ class Notifications(
             })
             style = Notification.BigTextStyle()
 
-            setSmallIcon(R.drawable.ic_launcher_quick_settings)
+            setSafeSmallIcon()
 
             build()
         }
