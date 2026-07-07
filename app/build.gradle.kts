@@ -111,6 +111,7 @@ val gitVersionName = getVersionName(git, gitVersionTriple)
 
 val projectUrl = "https://github.com/chenxiaolong/BCR"
 val releaseMetadataBranch = "master"
+val moduleUpdateJsonUrl = "https://github.com/autokick/BCR/releases/latest/download/update.json"
 
 val extraDir = layout.buildDirectory.map { it.dir("extra") }
 val archiveDir = extraDir.map { it.dir("archive") }
@@ -257,6 +258,7 @@ androidComponents.onVariants { variant ->
     val moduleProp = tasks.register("moduleProp${capitalized}") {
         inputs.property("projectUrl", projectUrl)
         inputs.property("releaseMetadataBranch", releaseMetadataBranch)
+        inputs.property("moduleUpdateJsonUrl", moduleUpdateJsonUrl)
         inputs.property("rootProject.name", rootProject.name)
         inputs.property("variant.applicationId", variant.applicationId)
         inputs.property("variant.name", variant.name)
@@ -276,7 +278,7 @@ androidComponents.onVariants { variant ->
             props["description"] = "Basic Call Recorder"
 
             if (variant.name == "release") {
-                props["updateJson"] = "${projectUrl}/raw/${releaseMetadataBranch}/app/magisk/updates/${variant.name}/info.json"
+                props["updateJson"] = moduleUpdateJsonUrl
             }
 
             outputFile.get().asFile.writeText(
