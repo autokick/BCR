@@ -41,6 +41,26 @@ Reapply on future upstream versions:
 - Keep main recording file creation, encoding, and final move behavior unchanged unless upstream
   refactors require touching the surrounding code.
 
+## Patch 3: Fork module updates
+
+Why:
+- The Magisk/KernelSU module updater should fetch patched releases from `autokick/BCR`, not the
+  original upstream BCR release ZIPs.
+- Without this, pressing the manager's update button can replace the patched module with upstream's
+  unpatched module.
+
+What to keep:
+- Release builds must write `updateJson=https://github.com/autokick/BCR/releases/latest/download/update.json`
+  into `module.prop`.
+- `.github/workflows/patched-release.yml` must upload an `update.json` release asset whose `zipUrl`
+  points at the patched ZIP in the same fork release.
+
+Reapply on future upstream versions:
+- Re-check `app/build.gradle.kts`'s `moduleProp*` task if upstream refactors module metadata
+  generation.
+- Verify the generated release ZIP's `module.prop` points to `autokick/BCR`, not
+  `chenxiaolong/BCR`.
+
 ## GitHub Actions automation
 
 Workflow:

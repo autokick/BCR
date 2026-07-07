@@ -164,6 +164,60 @@ jobs:
           cd source
           ./gradlew --no-daemon assembleRelease zipRelease
 
+      - name: Prepare module update metadata
+        if: steps.release_state.outputs.exists != 'true' || (github.event_name == 'workflow_dispatch' && inputs.force_release)
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.version.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+          import zipfile
+          from pathlib import Path
+
+          dist_dir = Path("source/app/build/distributions/release")
+          zips = sorted(dist_dir.glob("*.zip"))
+          if not zips:
+              print("::error::No release module zip was produced")
+              sys.exit(1)
+
+          zip_path = zips[-1]
+          with zipfile.ZipFile(zip_path) as z:
+              module_prop = z.read("module.prop").decode("utf-8")
+
+          props = {}
+          for line in module_prop.splitlines():
+              if "=" in line:
+                  key, value = line.split("=", 1)
+                  props[key] = value
+
+          version = props.get("version", "").removeprefix("v")
+          version_code = props.get("versionCode", "")
+          if not version or not version_code:
+              print(f"::error::Could not read version or versionCode from {zip_path}")
+              sys.exit(1)
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          release_tag = os.environ["RELEASE_TAG"]
+
+          update = {
+              "version": version,
+              "versionCode": int(version_code),
+              "zipUrl": f"https://github.com/{repository}/releases/download/{release_tag}/{zip_path.name}",
+              "changelog": f"https://github.com/{repository}/releases/download/{release_tag}/PATCH_NOTES.md",
+          }
+
+          with open("update.json", "w", encoding="utf-8") as f:
+              json.dump(update, f, indent=4)
+              f.write("\n")
+
+          print(json.dumps(update, indent=4))
+          PY
+
       - name: Prepare release notes
         if: steps.release_state.outputs.exists != 'true' || (github.event_name == 'workflow_dispatch' && inputs.force_release)
         shell: bash
@@ -174,6 +228,7 @@ jobs:
           Local patches applied:
           - Use framework Icon object for notification small icon
           - Make ancillary log file creation best-effort
+          - Point module update checks to this fork's latest release metadata
 
           Fork automation commit: ${GITHUB_SHA}
           Upstream source tag: ${{ steps.version.outputs.upstream_tag }}
@@ -188,8 +243,10 @@ jobs:
           name: ${{ steps.version.outputs.release_name }}
           body_path: release-body.md
           fail_on_unmatched_files: true
+          overwrite_files: true
           files: |
             source/app/build/outputs/apk/release/app-release.apk
             source/app/build/distributions/release/*.zip
+            update.json
             fork/PATCH_NOTES.md
             fork/patches/*.patch
