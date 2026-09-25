@@ -133,6 +133,62 @@ jobs:
           git -C source config user.email "151527951+autokick@users.noreply.github.com"
           git -C source am --3way "${GITHUB_WORKSPACE}"/fork/patches/*.patch
 
+      - name: Add fork provenance to source tree
+        if: steps.release_state.outputs.exists != 'true' || (github.event_name == 'workflow_dispatch' && inputs.force_release)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cp fork/README.md source/README.md
+          cp fork/FORK_NOTICE.md source/FORK_NOTICE.md
+          cp fork/PATCH_NOTES.md source/PATCH_NOTES.md
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("source/app/build.gradle.kts")
+          text = path.read_text(encoding="utf-8")
+
+          replacements = {
+              'props["author"] = "chenxiaolong"':
+                  'props["author"] = "chenxiaolong; autokick (fork patches)"',
+              'props["description"] = "Basic Call Recorder"':
+                  'props["description"] = "Basic Call Recorder - patched fork"',
+              '        from(File(rootDir, "README.md"))':
+                  '        from(File(rootDir, "README.md"))\n'
+                  '        from(File(rootDir, "FORK_NOTICE.md"))\n'
+                  '        from(File(rootDir, "PATCH_NOTES.md"))',
+          }
+
+          for old, new in replacements.items():
+              if old not in text:
+                  raise SystemExit(f"Expected build.gradle.kts text not found: {old}")
+              text = text.replace(old, new, 1)
+
+          path.write_text(text, encoding="utf-8")
+          PY
+
+          git -C source add README.md FORK_NOTICE.md PATCH_NOTES.md app/build.gradle.kts
+          git -C source commit -m "Add fork release provenance"
+
+      - name: Prepare corresponding source archive
+        id: source_archive
+        if: steps.release_state.outputs.exists != 'true' || (github.event_name == 'workflow_dispatch' && inputs.force_release)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          filename="BCR-${{ steps.version.outputs.release_tag }}-source.tar.gz"
+          path="${GITHUB_WORKSPACE}/${filename}"
+          git -C source archive \
+            --format=tar.gz \
+            --prefix="BCR-${{ steps.version.outputs.release_tag }}-source/" \
+            --output="${path}" \
+            HEAD
+
+          echo "filename=${filename}" >> "${GITHUB_OUTPUT}"
+          echo "path=${path}" >> "${GITHUB_OUTPUT}"
+
       - name: Prepare signing inputs
         if: steps.release_state.outputs.exists != 'true' || (github.event_name == 'workflow_dispatch' && inputs.force_release)
         shell: bash
@@ -163,6 +219,52 @@ jobs:
 
           cd source
           ./gradlew --no-daemon assembleRelease zipRelease
+
+      - name: Prepare signing metadata
+        id: signing
+        if: steps.release_state.outputs.exists != 'true' || (github.event_name == 'workflow_dispatch' && inputs.force_release)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          apk_path="$(find source/app/build/outputs/apk/release -maxdepth 1 -type f -name '*.apk' | sort | head -n 1)"
+          if [[ -z "${apk_path}" ]]; then
+            echo "::error::No release APK was produced"
+            exit 1
+          fi
+
+          sdk_dir="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          apksigner="$(find "${sdk_dir}/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          if [[ -z "${apksigner}" ]]; then
+            echo "::error::Could not locate apksigner"
+            exit 1
+          fi
+
+          cert_sha256="$("${apksigner}" verify --print-certs "${apk_path}" \
+            | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' \
+            | head -n 1)"
+          if [[ -z "${cert_sha256}" ]]; then
+            echo "::error::Could not determine APK signing certificate SHA-256 digest"
+            exit 1
+          fi
+
+          cat > SIGNING.txt <<EOF
+          BCR patched fork release signing information
+
+          Repository: https://github.com/${GITHUB_REPOSITORY}
+          Release: ${{ steps.version.outputs.release_tag }}
+          Upstream source tag: ${{ steps.version.outputs.upstream_tag }}
+          APK signing certificate SHA-256: ${cert_sha256}
+
+          The APK is signed with the autokick/BCR fork maintainer's Android signing key.
+          It is not signed with the upstream chenxiaolong/BCR APK signing key.
+
+          The module ZIP is not separately authenticated with the upstream project's SSH
+          release-signing key. Do not use upstream signature instructions to authenticate
+          this fork's release artifacts.
+          EOF
+
+          echo "cert_sha256=${cert_sha256}" >> "${GITHUB_OUTPUT}"
 
       - name: Prepare module update metadata
         if: steps.release_state.outputs.exists != 'true' || (github.event_name == 'workflow_dispatch' && inputs.force_release)
@@ -218,20 +320,48 @@ jobs:
           print(json.dumps(update, indent=4))
           PY
 
+      - name: Prepare release checksums
+        if: steps.release_state.outputs.exists != 'true' || (github.event_name == 'workflow_dispatch' && inputs.force_release)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          : > SHA256SUMS
+          for file in \
+            source/app/build/outputs/apk/release/*.apk \
+            source/app/build/distributions/release/*.zip \
+            "${{ steps.source_archive.outputs.path }}" \
+            update.json \
+            SIGNING.txt; do
+            digest="$(sha256sum "${file}" | awk '{print $1}')"
+            printf '%s  %s\n' "${digest}" "$(basename "${file}")" >> SHA256SUMS
+          done
+
       - name: Prepare release notes
         if: steps.release_state.outputs.exists != 'true' || (github.event_name == 'workflow_dispatch' && inputs.force_release)
         shell: bash
         run: |
           cat > release-body.md <<EOF
-          Automated patched build for upstream BCR ${{ steps.version.outputs.upstream_tag }}.
+          Automated modified build of upstream BCR ${{ steps.version.outputs.upstream_tag }}.
+
+          This is a GPL-3.0-only modified fork release from autokick/BCR, not an
+          official chenxiaolong/BCR release.
 
           Local patches applied:
           - Use framework Icon object for notification small icon
           - Make ancillary log file creation best-effort
           - Point module update checks to this fork's latest release metadata
+          - Embed fork provenance and modification notices in distributed source/module artifacts
 
           Fork automation commit: ${GITHUB_SHA}
           Upstream source tag: ${{ steps.version.outputs.upstream_tag }}
+          APK certificate SHA-256: ${{ steps.signing.outputs.cert_sha256 }}
+          Corresponding source: ${{ steps.source_archive.outputs.filename }}
+
+          Verification:
+          - SIGNING.txt documents the APK signing certificate.
+          - SHA256SUMS contains hashes for the downloadable artifacts.
+          - This fork does not use the upstream project's APK signing key or SSH release signature.
           EOF
 
       - name: Publish GitHub release
@@ -247,6 +377,10 @@ jobs:
           files: |
             source/app/build/outputs/apk/release/app-release.apk
             source/app/build/distributions/release/*.zip
+            ${{ steps.source_archive.outputs.path }}
             update.json
+            SIGNING.txt
+            SHA256SUMS
+            fork/FORK_NOTICE.md
             fork/PATCH_NOTES.md
             fork/patches/*.patch
