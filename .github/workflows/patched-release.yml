@@ -248,9 +248,18 @@ jobs:
             exit 1
           fi
 
-          cert_sha256="$("${apksigner}" verify --print-certs "${apk_path}" \
-            | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' \
-            | head -n 1)"
+          cert_output="$("${apksigner}" verify --print-certs "${apk_path}" 2>&1)"
+          printf '%s\n' "${cert_output}"
+
+          cert_sha256="$(
+            printf '%s\n' "${cert_output}" \
+              | awk 'BEGIN { IGNORECASE=1 } /certificate SHA-256 digest:/ {
+                  sub(/^.*certificate SHA-256 digest:[[:space:]]*/, "")
+                  gsub(/:/, "")
+                  print tolower($1)
+                  exit
+                }'
+          )"
           if [[ -z "${cert_sha256}" ]]; then
             echo "::error::Could not determine APK signing certificate SHA-256 digest"
             exit 1
