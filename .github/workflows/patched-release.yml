@@ -417,8 +417,8 @@ jobs:
           release_id="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" --jq '.id')"
 
           gh api --paginate "repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets?per_page=100" \
-            --jq '.[] | select(.name | endswith("-release.zip")) | [.id, .name] | @tsv' \
-            | while IFS=\t' read -r asset_id asset_name; do
+            --jq '.[] | select(.name | endswith("-release.zip")) | "\(.id) \(.name)"' \
+            | while read -r asset_id asset_name; do
                 if [[ "${asset_name}" != "${current_zip}" ]]; then
                   echo "Removing stale release asset: ${asset_name}"
                   gh api --method DELETE "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}"
