@@ -1,6 +1,15 @@
 name: Release patched upstream build
 
 on:
+  push:
+    branches:
+      - master
+    paths:
+      - '.github/workflows/patched-release.yml'
+      - 'README.md'
+      - 'FORK_NOTICE.md'
+      - 'PATCH_NOTES.md'
+      - 'patches/**'
   workflow_dispatch:
     inputs:
       upstream_tag:
@@ -73,13 +82,13 @@ jobs:
           fi
 
       - name: Stop when patched release already exists
-        if: steps.release_state.outputs.exists == 'true' && !(github.event_name == 'workflow_dispatch' && inputs.force_release)
+        if: steps.release_state.outputs.exists == 'true' && github.event_name != 'push' && !(github.event_name == 'workflow_dispatch' && inputs.force_release)
         shell: bash
         run: |
           echo "Patched release ${{ steps.version.outputs.release_tag }} already exists"
 
       - name: Check out upstream source
-        if: steps.release_state.outputs.exists != 'true' || (github.event_name == 'workflow_dispatch' && inputs.force_release)
+        if: steps.release_state.outputs.exists != 'true' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.force_release)
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: chenxiaolong/BCR
@@ -88,13 +97,13 @@ jobs:
           path: source
 
       - name: Validate gradle wrapper checksum
-        if: steps.release_state.outputs.exists != 'true' || (github.event_name == 'workflow_dispatch' && inputs.force_release)
+        if: steps.release_state.outputs.exists != 'true' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.force_release)
         uses: gradle/actions/wrapper-validation@f29f5a9d7b09a7c6b29859002d29d24e1674c884 # v5.0.1
         with:
           min-wrapper-count: 1
 
       - name: Set up JDK 21
-        if: steps.release_state.outputs.exists != 'true' || (github.event_name == 'workflow_dispatch' && inputs.force_release)
+        if: steps.release_state.outputs.exists != 'true' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.force_release)
         uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5.2.0
         with:
           distribution: temurin
@@ -102,7 +111,7 @@ jobs:
           cache: gradle
 
       - name: Validate release signing secrets
-        if: steps.release_state.outputs.exists != 'true' || (github.event_name == 'workflow_dispatch' && inputs.force_release)
+        if: steps.release_state.outputs.exists != 'true' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.force_release)
         shell: bash
         env:
           RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
@@ -124,7 +133,7 @@ jobs:
           done
 
       - name: Apply local patches
-        if: steps.release_state.outputs.exists != 'true' || (github.event_name == 'workflow_dispatch' && inputs.force_release)
+        if: steps.release_state.outputs.exists != 'true' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.force_release)
         shell: bash
         run: |
           set -euo pipefail
@@ -134,7 +143,7 @@ jobs:
           git -C source am --3way "${GITHUB_WORKSPACE}"/fork/patches/*.patch
 
       - name: Add fork provenance to source tree
-        if: steps.release_state.outputs.exists != 'true' || (github.event_name == 'workflow_dispatch' && inputs.force_release)
+        if: steps.release_state.outputs.exists != 'true' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.force_release)
         shell: bash
         run: |
           set -euo pipefail
@@ -173,7 +182,7 @@ jobs:
 
       - name: Prepare corresponding source archive
         id: source_archive
-        if: steps.release_state.outputs.exists != 'true' || (github.event_name == 'workflow_dispatch' && inputs.force_release)
+        if: steps.release_state.outputs.exists != 'true' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.force_release)
         shell: bash
         run: |
           set -euo pipefail
@@ -189,7 +198,7 @@ jobs:
           echo "path=${path}" >> "${GITHUB_OUTPUT}"
 
       - name: Prepare signing inputs
-        if: steps.release_state.outputs.exists != 'true' || (github.event_name == 'workflow_dispatch' && inputs.force_release)
+        if: steps.release_state.outputs.exists != 'true' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.force_release)
         shell: bash
         env:
           RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
@@ -206,7 +215,7 @@ jobs:
           echo "${RELEASE_KEYSTORE_BASE64}" | base64 --decode > source/release.keystore
 
       - name: Build patched release
-        if: steps.release_state.outputs.exists != 'true' || (github.event_name == 'workflow_dispatch' && inputs.force_release)
+        if: steps.release_state.outputs.exists != 'true' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.force_release)
         shell: bash
         env:
           RELEASE_KEYSTORE: ${{ github.workspace }}/source/release.keystore
@@ -221,7 +230,7 @@ jobs:
 
       - name: Prepare signing metadata
         id: signing
-        if: steps.release_state.outputs.exists != 'true' || (github.event_name == 'workflow_dispatch' && inputs.force_release)
+        if: steps.release_state.outputs.exists != 'true' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.force_release)
         shell: bash
         run: |
           set -euo pipefail
@@ -266,7 +275,7 @@ jobs:
           echo "cert_sha256=${cert_sha256}" >> "${GITHUB_OUTPUT}"
 
       - name: Prepare module update metadata
-        if: steps.release_state.outputs.exists != 'true' || (github.event_name == 'workflow_dispatch' && inputs.force_release)
+        if: steps.release_state.outputs.exists != 'true' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.force_release)
         shell: bash
         env:
           RELEASE_TAG: ${{ steps.version.outputs.release_tag }}
@@ -320,7 +329,7 @@ jobs:
           PY
 
       - name: Prepare release checksums
-        if: steps.release_state.outputs.exists != 'true' || (github.event_name == 'workflow_dispatch' && inputs.force_release)
+        if: steps.release_state.outputs.exists != 'true' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.force_release)
         shell: bash
         run: |
           set -euo pipefail
@@ -337,7 +346,7 @@ jobs:
           done
 
       - name: Prepare release notes
-        if: steps.release_state.outputs.exists != 'true' || (github.event_name == 'workflow_dispatch' && inputs.force_release)
+        if: steps.release_state.outputs.exists != 'true' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.force_release)
         shell: bash
         run: |
           cat > release-body.md <<EOF
@@ -364,7 +373,7 @@ jobs:
           EOF
 
       - name: Publish GitHub release
-        if: steps.release_state.outputs.exists != 'true' || (github.event_name == 'workflow_dispatch' && inputs.force_release)
+        if: steps.release_state.outputs.exists != 'true' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.force_release)
         uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b # v2.5.0
         with:
           tag_name: ${{ steps.version.outputs.release_tag }}
