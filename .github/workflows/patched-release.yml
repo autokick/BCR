@@ -178,7 +178,9 @@ jobs:
           PY
 
           git -C source add README.md FORK_NOTICE.md PATCH_NOTES.md app/build.gradle.kts
-          git -C source commit -m "Add fork release provenance"
+          GIT_AUTHOR_DATE="2000-01-01T00:00:00Z" \
+          GIT_COMMITTER_DATE="2000-01-01T00:00:00Z" \
+            git -C source commit -m "Add fork release provenance"
 
       - name: Prepare corresponding source archive
         id: source_archive
@@ -401,3 +403,24 @@ jobs:
             fork/FORK_NOTICE.md
             fork/PATCH_NOTES.md
             fork/patches/*.patch
+
+      - name: Remove stale module ZIP assets
+        if: steps.release_state.outputs.exists != 'true' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.force_release)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.version.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+
+          current_zip="$(basename "$(find source/app/build/distributions/release -maxdepth 1 -type f -name '*-release.zip' | sort | tail -n 1)")"
+          release_id="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" --jq '.id')"
+
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets?per_page=100" \
+            --jq '.[] | select(.name | endswith("-release.zip")) | [.id, .name] | @tsv' \
+            | while IFS=\t' read -r asset_id asset_name; do
+                if [[ "${asset_name}" != "${current_zip}" ]]; then
+                  echo "Removing stale release asset: ${asset_name}"
+                  gh api --method DELETE "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}"
+                fi
+              done
