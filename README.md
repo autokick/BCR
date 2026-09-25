@@ -1,9 +1,12 @@
 # Basic Call Recorder
 
+> [!IMPORTANT]
+> This repository is a modified fork of [chenxiaolong/BCR](https://github.com/chenxiaolong/BCR). Fork-specific changes began on 2026-03-08 and are documented in [`PATCH_NOTES.md`](./PATCH_NOTES.md) and [`FORK_NOTICE.md`](./FORK_NOTICE.md). Release artifacts from this fork are independently signed and are not authenticated by the upstream project's signing keys.
+
 <img src="app/images/icon.svg" alt="app icon" width="72" />
 
-[![latest release badge](https://img.shields.io/github/v/release/chenxiaolong/BCR?sort=semver)](https://github.com/chenxiaolong/BCR/releases/latest)
-[![license badge](https://img.shields.io/github/license/chenxiaolong/BCR)](./LICENSE)
+[![latest release badge](https://img.shields.io/github/v/release/autokick/BCR?sort=semver)](https://github.com/autokick/BCR/releases/latest)
+[![license badge](https://img.shields.io/github/license/autokick/BCR)](./LICENSE)
 
 BCR is a simple Android call recording app for rooted devices or devices running custom firmware. Once enabled, it stays out of the way and automatically records incoming and outgoing calls in the background.
 
@@ -38,7 +41,7 @@ As the name alludes, BCR intends to be a basic as possible. The project will hav
 
 ## Usage
 
-1. Download the latest version from the [releases page](https://github.com/chenxiaolong/BCR/releases). To verify the digital signature, see the [verifying digital signatures](#verifying-digital-signatures) section.
+1. Download the latest patched version from this fork's [releases page](https://github.com/autokick/BCR/releases). To verify the APK signing certificate and release checksums, see [Verifying fork releases](#verifying-fork-releases).
 
 2. Install BCR as a system app.
 
@@ -332,27 +335,32 @@ BCR relies heavily on system app permissions in order to function properly. This
 
 With these two permissions, BCR can reliably detect phone calls and record from the call's audio stream. The recording process pulls PCM s16le raw audio and uses Android's built-in encoders to produce the compressed output file.
 
-## Verifying digital signatures
+## Verifying fork releases
 
-Both the zip file and the APK contained within are digitally signed. **NOTE**: The zip file signing mechanism switched from GPG to SSH as of version 1.31. To verify signatures for old versions, see version 1.30's [`README.md`](https://github.com/chenxiaolong/BCR/blob/v1.30/README.md#verifying-digital-signatures).
+Release APKs from `autokick/BCR` are signed with the fork maintainer's own Android signing key. They are **not** signed with the upstream BCR APK signing key. The Magisk/KernelSU ZIP published by this fork is not separately signed with the upstream project's SSH key.
 
-### Verifying zip file signature
+Every patched release publishes:
 
-To verify the digital signatures of the downloads, follow [the steps here](https://github.com/chenxiaolong/chenxiaolong/blob/master/VERIFY_SSH_SIGNATURES.md).
+* `SIGNING.txt` with the SHA-256 fingerprint of the certificate used to sign that release APK.
+* `SHA256SUMS` with hashes for the release APK, module ZIP, source archive, and release metadata.
+* A corresponding-source `.tar.gz` archive containing the upstream source plus the fork changes used for that release.
+* `PATCH_NOTES.md` and the individual patch files documenting local changes.
 
-### Verifying apk signature
+To verify the APK certificate, extract the APK from the module ZIP or download the standalone APK and run:
 
-First, extract the apk from the zip and then run:
-
+```bash
+apksigner verify --print-certs app-release.apk
 ```
-apksigner verify --print-certs system/priv-app/com.chiller3.bcr/app-release.apk
+
+Compare the reported `Signer #1 certificate SHA-256 digest` with the value in that release's `SIGNING.txt`.
+
+To verify downloaded file hashes, place the files and `SHA256SUMS` in the same directory and run:
+
+```bash
+sha256sum -c SHA256SUMS
 ```
 
-Then, check that the SHA-256 digest of the APK signing certificate is:
-
-```
-d16f9b375df668c58ef4bb855eae959713d6d02e45f7f2c05ce2c27ae944f4f9
-```
+Do not use the upstream project's APK certificate fingerprint or upstream SSH release signatures to authenticate artifacts downloaded from this fork. See [`FORK_NOTICE.md`](./FORK_NOTICE.md) for provenance details.
 
 ## Building from source
 
@@ -398,4 +406,4 @@ If you are interested in implementing a new feature and would like to see it inc
 
 ## License
 
-BCR is licensed under GPLv3. Please see [`LICENSE`](./LICENSE) for the full license text.
+BCR is licensed under GPLv3. Please see [`LICENSE`](./LICENSE) for the full license text. This repository is a modified fork; upstream copyright notices are preserved, and fork modifications are documented in [`FORK_NOTICE.md`](./FORK_NOTICE.md) and [`PATCH_NOTES.md`](./PATCH_NOTES.md).
