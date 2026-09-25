@@ -181,10 +181,9 @@ jobs:
           filename="BCR-${{ steps.version.outputs.release_tag }}-source.tar.gz"
           path="${GITHUB_WORKSPACE}/${filename}"
           git -C source archive \
-            --format=tar.gz \
+            --format=tar \
             --prefix="BCR-${{ steps.version.outputs.release_tag }}-source/" \
-            --output="${path}" \
-            HEAD
+            HEAD | gzip -n > "${path}"
 
           echo "filename=${filename}" >> "${GITHUB_OUTPUT}"
           echo "path=${path}" >> "${GITHUB_OUTPUT}"
@@ -377,7 +376,7 @@ jobs:
           files: |
             source/app/build/outputs/apk/release/app-release.apk
             source/app/build/distributions/release/*.zip
-            ${{ steps.source_archive.outputs.path }}
+            ${{ steps.source_archive.outputs.filename }}
             update.json
             SIGNING.txt
             SHA256SUMS
